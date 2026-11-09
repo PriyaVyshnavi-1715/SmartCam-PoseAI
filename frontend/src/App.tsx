@@ -176,19 +176,53 @@ function App() {
   }, [cameraRunning])
 
   // Load data when page changes
+
+  // Load data when page changes
   useEffect(() => {
     if (!token) return
-    if (page === 'history') {
-      fetch(apiUrl('/api/sessions'), { headers: authHeaders() })
-      fetch(apiUrl('/api/captures'), { headers: authHeaders() })
-    }
-    if (page === 'analytics') {
-      fetch(apiUrl('/api/analytics/summary'), { headers: authHeaders() })
-      .then(r => r.json())
-      .then(d => setAnalytics(d))
-      .catch(() => setAnalytics(null))}
 
-  }, [page, token]) // eslint-disable-line
+    const loadData = async () => {
+      try {
+        if (page === 'history') {
+          const [sessionsResponse, capturesResponse] = await Promise.all([
+            fetch(apiUrl('/api/sessions'), { headers: authHeaders() }),
+            fetch(apiUrl('/api/captures'), { headers: authHeaders() })
+          ])
+
+          if (!sessionsResponse.ok || !capturesResponse.ok) {
+            throw new Error('Could not load history')
+          }
+
+          const sessionsData = await sessionsResponse.json()
+          const capturesData = await capturesResponse.json()
+
+          setSessions(Array.isArray(sessionsData)
+            ? sessionsData
+            : sessionsData.sessions ?? [])
+
+          setCaptures(Array.isArray(capturesData)
+            ? capturesData
+            : capturesData.captures ?? [])
+        }
+
+        if (page === 'analytics') {
+          const response = await fetch(
+            apiUrl('/api/analytics/summary'),
+            { headers: authHeaders() }
+          )
+
+          if (response.ok) {
+            setAnalytics(await response.json())
+          }
+        }
+      } catch (error) {
+        console.error('History loading error:', error)
+      }
+    }
+
+    loadData()
+  }, [page, token])
+
 
   const poses = apiPoses.length > 0 ? apiPoses : ['T-Pose','Standing Pose','Sitting Pose','Warrior Pose','Squat Pose','Tree Pose']
   const score = analysis.match_ready && analysis.match_score !== null ? analysis.match_score.toFixed(1) : '--'

@@ -94,34 +94,55 @@ class PoseEngine:
             },
         }
 
+
+
     def start(self):
         if self.running:
             return
+
         for model_path in (POSE_MODEL, HAND_MODEL, FACE_MODEL):
             if not model_path.is_file():
-                raise FileNotFoundError(f"Required MediaPipe model not found: {model_path}")
-        pose_detector = hand_detector = face_detector = camera = None
+                raise FileNotFoundError(
+                    f"Required MediaPipe model not found: {model_path}"
+                )
+
+        pose_detector = None
+        hand_detector = None
+        face_detector = None
+
         try:
             pose_options = vision.PoseLandmarkerOptions(
-                base_options=python.BaseOptions(model_asset_path=str(POSE_MODEL)),
+                base_options=python.BaseOptions(
+                    model_asset_path=str(POSE_MODEL)
+                ),
                 running_mode=vision.RunningMode.VIDEO,
                 num_poses=1,
                 min_pose_detection_confidence=0.5,
                 min_pose_presence_confidence=0.5,
                 min_tracking_confidence=0.5,
             )
-            pose_detector = vision.PoseLandmarker.create_from_options(pose_options)
+            pose_detector = vision.PoseLandmarker.create_from_options(
+                pose_options
+            )
+
             hand_options = vision.HandLandmarkerOptions(
-                base_options=python.BaseOptions(model_asset_path=str(HAND_MODEL)),
+                base_options=python.BaseOptions(
+                    model_asset_path=str(HAND_MODEL)
+                ),
                 running_mode=vision.RunningMode.VIDEO,
                 num_hands=2,
                 min_hand_detection_confidence=0.5,
                 min_hand_presence_confidence=0.5,
                 min_tracking_confidence=0.5,
             )
-            hand_detector = vision.HandLandmarker.create_from_options(hand_options)
+            hand_detector = vision.HandLandmarker.create_from_options(
+                hand_options
+            )
+
             face_options = vision.FaceLandmarkerOptions(
-                base_options=python.BaseOptions(model_asset_path=str(FACE_MODEL)),
+                base_options=python.BaseOptions(
+                    model_asset_path=str(FACE_MODEL)
+                ),
                 running_mode=vision.RunningMode.VIDEO,
                 num_faces=1,
                 min_face_detection_confidence=0.5,
@@ -129,45 +150,57 @@ class PoseEngine:
                 min_tracking_confidence=0.5,
                 output_face_blendshapes=True,
             )
-            face_detector = vision.FaceLandmarker.create_from_options(face_options)
-            camera = cv2.VideoCapture(CAMERA_INDEX, cv2.CAP_DSHOW)
-            camera.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
-            camera.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
-            if not camera.isOpened():
-                raise RuntimeError("Unable to open webcam. Check camera permissions.")
+            face_detector = vision.FaceLandmarker.create_from_options(
+                face_options
+            )
+
             self.pose_detector = pose_detector
             self.hand_detector = hand_detector
             self.face_detector = face_detector
-            self.camera = camera
+
+            self.camera = None
             self.angle_smoother.reset()
             self.stability_detector.reset()
             self.video_start_time = time.monotonic()
             self.last_timestamp = -1
             self.running = True
-            self.latest_results = self._empty_results("Move into the camera view.")
+
+            self.latest_results = self._empty_results(
+                "Move into the camera view."
+            )
+
             print("SMART CAMERA ENGINE STARTED")
+
         except Exception:
-            if camera is not None:
-                camera.release()
-            for detector in (pose_detector, hand_detector, face_detector):
+            for detector in (
+                pose_detector,
+                hand_detector,
+                face_detector,
+            ):
                 if detector is not None:
                     detector.close()
             raise
 
     def stop(self):
         self.running = False
-        if self.camera is not None:
-            self.camera.release()
-            self.camera = None
-        for attr in ("pose_detector", "hand_detector", "face_detector"):
+
+        for attr in (
+            "pose_detector",
+            "hand_detector",
+            "face_detector",
+        ):
             detector = getattr(self, attr)
+
             if detector is not None:
                 detector.close()
                 setattr(self, attr, None)
+
+        self.camera = None
         self.angle_smoother.reset()
         self.stability_detector.reset()
         self.clean_frame = None
         self.latest_results = self._empty_results("Camera stopped.")
+
         print("SMART CAMERA ENGINE STOPPED")
 
     def set_target_pose(self, pose_name):
@@ -293,96 +326,259 @@ class PoseEngine:
             "pose_stable": results.get("pose_stable", False),
         }
 
-    def process_frame(self):
-        if not self.running or self.camera is None or any(
-            detector is None for detector in
-            (self.pose_detector, self.hand_detector, self.face_detector)
+    def process_frame(self, frame):
+        if not self.running or any(
+            detector is None
+            for detector in (
+                self.pose_detector,
+                self.hand_detector,
+                self.face_detector,
+            )
         ):
-            raise RuntimeError("Camera and models are not running.")
-        success, frame = self.camera.read()
-        if not success:
-            raise RuntimeError("Unable to read camera frame.")
-        frame = cv2.flip(frame, 1)
+            raise RuntimeError("Pose engine and models are not running.")
+
+        if frame is None:
+            raise ValueError("No camera frame received.")
+
+        frame = cv2.flip(frame.copy(), 1)
         self.clean_frame = frame.copy()
+
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+        mp_image = mp.Image(
+            image_format=mp.ImageFormat.SRGB,
+            data=rgb,
+        )
+
         timestamp = max(
             self.last_timestamp + 1,
             int((time.monotonic() - self.video_start_time) * 1000),
         )
         self.last_timestamp = timestamp
-        pose_result = self.pose_detector.detect_for_video(mp_image, timestamp)
+
+        pose_result = self.pose_detector.detect_for_video(
+            mp_image, timestamp
+        )
+
         body_detected = bool(pose_result.pose_landmarks)
+
         raw_angles = {name: None for name in JOINTS}
+        stable_angles = {name: None for name in JOINTS}
+
         sitting_analysis = {
-            "ready": False, "shoulder_tilt_degrees": None,
-            "head_offset": None, "feedback": ["Select Sitting Pose to begin."],
+            "ready": False,
+            "shoulder_tilt_degrees": None,
+            "head_offset": None,
+            "feedback": ["Select Sitting Pose to begin."],
         }
+
+        pose_stable = False
+        hand_count = 0
+        hand_gestures = []
+        face_detected = False
+        expression = "NO FACE"
+
+        pose_match = {
+            "ready": False,
+            "score": None,
+            "valid_joints": 0,
+            "required_joints": 5,
+            "feedback": ["Move into camera view."],
+            "joint_scores": {},
+            "analysis_mode": "full_body",
+        }
+
         if body_detected:
             landmarks = pose_result.pose_landmarks[0]
+
             self.draw_pose(frame, landmarks)
+
             angle_landmarks = (
                 pose_result.pose_world_landmarks[0]
-                if pose_result.pose_world_landmarks else landmarks
+                if pose_result.pose_world_landmarks
+                else landmarks
             )
+
             raw_angles = extract_joint_angles(
-                angle_landmarks, confidence_landmarks=landmarks, threshold=0.35,
+                angle_landmarks,
+                confidence_landmarks=landmarks,
+                threshold=0.35,
             )
+
             if self.selected_pose == "Sitting Pose":
                 sitting_analysis = analyze_sitting_posture(landmarks)
-        stable_angles = self.angle_smoother.update(raw_angles)
-        score_angles = {
-            name: stable_angles[name] if raw_angles.get(name) is not None else None
-            for name in JOINTS
-        }
-        pose_match = compare_pose(score_angles, self.selected_pose)
-        self.latest_joint_scores = pose_match.get("joint_scores", {})
-        if body_detected:
-            self.draw_alignment_rings(frame, pose_result.pose_landmarks[0])
-        pose_stable = self.stability_detector.update(raw_angles)
-        hand_result = self.hand_detector.detect_for_video(mp_image, timestamp)
-        hand_gestures = self.draw_hands(frame, hand_result)
-        hand_count = len(hand_gestures)
-        face_result = self.face_detector.detect_for_video(mp_image, timestamp)
-        face_detected, expression = self.draw_face(frame, face_result)
-        cv2.putText(frame, f"TARGET: {self.selected_pose}", (20, 35),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-        if pose_match["ready"]:
-            score_text = f"POSE MATCH: {pose_match['score']:.1f}%"
-            feedback = pose_match["feedback"]
-            feedback_text = feedback[0] if feedback else "All visible joints are within target ranges."
-        else:
-            score_text = f"WAITING FOR JOINTS: {pose_match['valid_joints']}/{pose_match['required_joints']}"
-            feedback_text = pose_match["feedback"][0] if pose_match["feedback"] else "Move into camera view."
-        score_color = (0, 255, 0)
-        if pose_match["ready"] and pose_match["score"] is not None:
-            if pose_match["score"] < 50:
-                score_color = (0, 0, 255)
-            elif pose_match["score"] < 80:
-                score_color = (0, 255, 255)
-        cv2.putText(frame, score_text, (20, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.65, score_color, 2)
-        cv2.putText(frame, feedback_text[:75], (20, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 255, 255), 1)
-        if pose_stable and pose_match["ready"] and pose_match["score"] is not None and pose_match["score"] > 70:
-            cv2.putText(frame, "POSE STABLE - Ready for capture!", (20, 130),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 0), 2)
-        hand_text = ", ".join(hand_gestures) if hand_gestures else "NO HANDS"
-        cv2.putText(frame, f"HANDS ({hand_count}/2): {hand_text}"[:75], (20, 160),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.48, (255, 180, 0), 1)
-        cv2.putText(frame, f"FACE: {'DETECTED' if face_detected else 'NOT DETECTED'}", (20, 190),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.48, (255, 0, 255), 1)
-        cv2.putText(frame, f"EXPRESSION: {expression}", (20, 220),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.48, (0, 255, 255), 1)
-        visible_joints = sum(value is not None for value in raw_angles.values())
+
+            stable_angles = self.angle_smoother.update(raw_angles)
+
+            score_angles = {
+                name: (
+                    stable_angles[name]
+                    if raw_angles.get(name) is not None
+                    else None
+                )
+                for name in JOINTS
+            }
+
+            pose_match = compare_pose(
+                score_angles,
+                self.selected_pose,
+            )
+
+            self.latest_joint_scores = pose_match.get(
+                "joint_scores", {}
+            )
+
+            self.draw_alignment_rings(frame, landmarks)
+
+            pose_stable = self.stability_detector.update(raw_angles)
+
+            hand_result = self.hand_detector.detect_for_video(
+                mp_image, timestamp
+            )
+            hand_gestures = self.draw_hands(frame, hand_result)
+            hand_count = len(hand_gestures)
+
+            face_result = self.face_detector.detect_for_video(
+                mp_image, timestamp
+            )
+            face_detected, expression = self.draw_face(
+                frame, face_result
+            )
+
+            cv2.putText(
+                frame,
+                f"TARGET: {self.selected_pose}",
+                (20, 35),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                (255, 255, 255),
+                2,
+            )
+
+            if pose_match["ready"]:
+                score_text = (
+                    f"POSE MATCH: {pose_match['score']:.1f}%"
+                )
+                feedback = pose_match["feedback"]
+                feedback_text = (
+                    feedback[0]
+                    if feedback
+                    else "All visible joints are within target ranges."
+                )
+            else:
+                score_text = (
+                    f"WAITING FOR JOINTS: "
+                    f"{pose_match['valid_joints']}/"
+                    f"{pose_match['required_joints']}"
+                )
+                feedback = pose_match["feedback"]
+                feedback_text = (
+                    feedback[0]
+                    if feedback
+                    else "Move into camera view."
+                )
+
+            score_color = (0, 255, 0)
+
+            if pose_match["ready"] and pose_match["score"] is not None:
+                if pose_match["score"] < 50:
+                    score_color = (0, 0, 255)
+                elif pose_match["score"] < 80:
+                    score_color = (0, 255, 255)
+
+            cv2.putText(
+                frame,
+                score_text,
+                (20, 70),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.65,
+                score_color,
+                2,
+            )
+
+            cv2.putText(
+                frame,
+                feedback_text[:75],
+                (20, 100),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.42,
+                (0, 255, 255),
+                1,
+            )
+
+            if (
+                pose_stable
+                and pose_match["ready"]
+                and pose_match["score"] is not None
+                and pose_match["score"] > 70
+            ):
+                cv2.putText(
+                    frame,
+                    "POSE STABLE - Ready for capture!",
+                    (20, 130),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.55,
+                    (0, 255, 0),
+                    2,
+                )
+
+            hand_text = (
+                ", ".join(hand_gestures)
+                if hand_gestures
+                else "NO HANDS"
+            )
+
+            cv2.putText(
+                frame,
+                f"HANDS ({hand_count}/2): {hand_text}"[:75],
+                (20, 160),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.48,
+                (255, 180, 0),
+                1,
+            )
+
+            cv2.putText(
+                frame,
+                f"FACE: {'DETECTED' if face_detected else 'NOT DETECTED'}",
+                (20, 190),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.48,
+                (255, 0, 255),
+                1,
+            )
+
+            cv2.putText(
+                frame,
+                f"EXPRESSION: {expression}",
+                (20, 220),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.48,
+                (0, 255, 255),
+                1,
+            )
+
+        visible_joints = sum(
+            value is not None for value in raw_angles.values()
+        )
+
         results = {
             "body_detected": body_detected,
             "selected_pose": self.selected_pose,
             "match_ready": pose_match["ready"],
             "match_score": pose_match["score"],
             "visible_joints": visible_joints,
-            "analysis_mode": pose_match.get("analysis_mode", "full_body"),
-            "required_joints": pose_match.get("required_joints", 5),
+            "analysis_mode": pose_match.get(
+                "analysis_mode", "full_body"
+            ),
+            "required_joints": pose_match.get(
+                "required_joints", 5
+            ),
             "joint_angles": {
-                name: round(value, 1) if value is not None else None
+                name: (
+                    round(value, 1)
+                    if value is not None
+                    else None
+                )
                 for name, value in stable_angles.items()
             },
             "joint_scores": pose_match.get("joint_scores", {}),
@@ -394,5 +590,7 @@ class PoseEngine:
             "pose_stable": pose_stable,
             "sitting_analysis": sitting_analysis,
         }
+
         self.latest_results = results
+
         return frame, results
