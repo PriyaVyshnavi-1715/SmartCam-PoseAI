@@ -1,6 +1,8 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
 import './App.css'
-
+// Backend API configuration
+const API_BASE = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '')
+const apiUrl = (path: string) => `${API_BASE}${path}`
 
 // ─── Types ──────────────────────────────────────────────
 type SittingAnalysis = {
@@ -131,15 +133,15 @@ function App() {
 
   // Check backend
   useEffect(() => {
-    fetch('/api/health').then(r => r.json()).then(d => setBackendStatus(d.status)).catch(() => setBackendStatus('Offline'))
-    fetch('/api/poses').then(r => r.json()).then(d => setApiPoses(d.poses)).catch(() => {})
-    fetch('/api/poses/catalog').then(r => r.json()).then(d => setPoseCatalog(d.poses)).catch(() => {})
+    fetch(apiUrl('/api/health')).then(r => r.json()).then(d => setBackendStatus(d.status)).catch(() => setBackendStatus('Offline'))
+    fetch(apiUrl('/api/poses')).then(r => r.json()).then(d => setApiPoses(d.poses)).catch(() => {})
+    fetch(apiUrl('/api/poses/catalog')).then(r => r.json()).then(d => setPoseCatalog(d.poses)).catch(() => {})
   }, [])
 
   // Auto-login check
   useEffect(() => {
     if (!token) return
-    fetch('/api/auth/me', { headers: authHeaders() })
+    fetch(apiUrl('/api/auth/me'), { headers: authHeaders() })
       .then(r => { if (!r.ok) throw new Error(); return r.json() })
       .then(d => { setUserName(d.name); setPage('dashboard') })
       .catch(() => { setToken(''); localStorage.removeItem('sc-token') })
@@ -151,7 +153,7 @@ function App() {
     let cancelled = false
     const poll = async () => {
       try {
-        const r = await fetch('/api/results')
+        const r = await fetch(apiUrl('/api/results'))
         if (!r.ok) throw new Error()
         const d = await r.json()
         if (!cancelled) {
@@ -177,12 +179,15 @@ function App() {
   useEffect(() => {
     if (!token) return
     if (page === 'history') {
-      fetch('/api/sessions', { headers: authHeaders() }).then(r => r.json()).then(d => setSessions(d.sessions || [])).catch(() => {})
-      fetch('/api/captures', { headers: authHeaders() }).then(r => r.json()).then(d => setCaptures(d.captures || [])).catch(() => {})
+      fetch(apiUrl('/api/sessions'), { headers: authHeaders() })
+      fetch(apiUrl('/api/captures'), { headers: authHeaders() })
     }
     if (page === 'analytics') {
-      fetch('/api/analytics/summary', { headers: authHeaders() }).then(r => r.json()).then(d => setAnalytics(d)).catch(() => {})
-    }
+      fetch(apiUrl('/api/analytics/summary'), { headers: authHeaders() })
+      .then(r => r.json())
+      .then(d => setAnalytics(d))
+      .catch(() => setAnalytics(null))}
+
   }, [page, token]) // eslint-disable-line
 
   const poses = apiPoses.length > 0 ? apiPoses : ['T-Pose','Standing Pose','Sitting Pose','Warrior Pose','Squat Pose','Tree Pose']
@@ -196,7 +201,7 @@ function App() {
       ? { name: authName, email: authEmail, password: authPass }
       : { email: authEmail, password: authPass }
     try {
-      const r = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      const r = await fetch(apiUrl(endpoint),  { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
       const d = await r.json()
       if (!r.ok) throw new Error(d.detail || 'Authentication failed')
       setToken(d.token); setUserName(d.name)
@@ -215,9 +220,9 @@ function App() {
   const startCamera = async () => {
     setCameraLoading(true); setCameraError('')
     try {
-      let r = await fetch('/api/camera/start', { method: 'POST' })
+      let r = await fetch(apiUrl('/api/camera/start'), { method: 'POST' })
       let d = await r.json(); if (!r.ok) throw new Error(d.detail)
-      r = await fetch('/api/pose/select', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pose: selectedPose }) })
+      r = await fetch(apiUrl('/api/pose/select'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pose: selectedPose }) })
       d = await r.json(); if (!r.ok) throw new Error(d.detail)
       setCameraRunning(true)
     } catch (e) { setCameraError(e instanceof Error ? e.message : 'Camera failed'); setCameraRunning(false) }
@@ -226,15 +231,26 @@ function App() {
   const stopCamera = async () => {
     setCameraLoading(true)
     try {
-      await fetch('/api/camera/stop', { method: 'POST', headers: authHeaders() })
+      await fetch(apiUrl('/api/camera/stop'), {
+        method: 'POST',
+        headers: authHeaders()})
       setCameraRunning(false); setAnalysis(emptyResults)
     } catch {} finally { setCameraLoading(false) }
   }
-  const changePose = async (pose: string) => {
-    setSelectedPose(pose)
-    if (!cameraRunning) return
-    try { await fetch('/api/pose/select', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pose }) }) } catch {}
-  }
+
+const changePose = async (pose: string) => {
+  setSelectedPose(pose)
+  if (!cameraRunning) return
+
+  try {
+    await fetch(apiUrl('/api/pose/select'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pose })
+    })
+  } catch {}
+}
+
 
   // ─── Capture ───────────────────────
   const startCapture = () => {
@@ -250,13 +266,13 @@ function App() {
   }
   const doCapture = async () => {
     try {
-      const r = await fetch('/api/camera/capture', { method: 'POST', headers: authHeaders() })
+      const r = await fetch(apiUrl('/api/camera/capture'), { method: 'POST', headers: authHeaders() })
       const d = await r.json()
       if (r.ok) { setLastCapture({ id: d.capture_id || 0, filename: d.filename, alignment_score: d.alignment_score, pose_name: d.pose_name, created_at: new Date().toISOString() }) }
     } catch {} finally { setCaptureCountdown(0) }
   }
   const deleteCapture = async (id: number) => {
-    try { await fetch(`/api/captures/${id}`, { method: 'DELETE', headers: authHeaders() }) } catch {}
+    try { await fetch(apiUrl(`/api/captures/${id}`), { method: 'DELETE', headers: authHeaders() }) } catch {}
     setCaptures(prev => prev.filter(c => c.id !== id))
   }
 
@@ -409,7 +425,7 @@ function App() {
               </div>
               <div className="camera-placeholder">
                 {cameraRunning ? (
-                  <img src="/api/camera/stream" alt="Live camera" style={{ width: '100%', height: '100%', objectFit: 'contain', borderRadius: 12 }} />
+                  <img src={apiUrl('/api/camera/stream')} alt="Live camera" style={{ width: '100%', height: '100%', objectFit: 'contain', borderRadius: 12 }} />
                 ) : (
                   <><div className="camera-symbol">◎</div><h3>Camera Preview</h3><p>Start the camera to begin pose analysis</p></>
                 )}
@@ -475,7 +491,7 @@ function App() {
           {lastCapture && <div className="capture-preview">
             <div className="panel">
               <h3>📸 Photo Captured!</h3>
-              <img src={`/api/captures/${lastCapture.id}/image`} alt="Capture" className="capture-img" />
+              <img src={apiUrl(`/api/captures/${lastCapture.id}/image`)} alt="Capture" className="capture-img" />
               <p>Score: {lastCapture.alignment_score?.toFixed(1) ?? '—'}% · {lastCapture.pose_name}</p>
               <div className="capture-actions">
                 <button className="btn-secondary" onClick={() => setLastCapture(null)}>Keep</button>
@@ -533,7 +549,7 @@ function App() {
                       <span>{s.alignment_score?.toFixed(1) ?? '—'}%</span>
                       <span>{Math.floor(s.duration_seconds/60)}:{String(s.duration_seconds%60).padStart(2,'0')}</span>
                       <button className="btn-sm" onClick={() => {
-                        fetch(`/api/sessions/${s.id}`, { method: 'DELETE', headers: authHeaders() })
+                        fetch(apiUrl(`/api/sessions/${s.id}`), {method: 'DELETE', headers: authHeaders()})
                         setSessions(prev => prev.filter(x => x.id !== s.id))
                       }}>✕</button>
                     </div>
@@ -546,7 +562,7 @@ function App() {
               <div className="capture-grid">
                 {captures.map(c => (
                   <div className="capture-card" key={c.id}>
-                    <img src={`/api/captures/${c.id}/image`} alt={c.pose_name || 'Capture'} />
+                    <img src={apiUrl(`/api/captures/${c.id}/image`)} alt={c.pose_name || 'Capture'} />
                     <div className="capture-info">
                       <strong>{c.pose_name || 'Photo'}</strong>
                       <span>{c.alignment_score?.toFixed(1) ?? '—'}%</span>
