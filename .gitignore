@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+*.egg
+
+# Environment
+.env
+
+# Database
+*.db
+*.sqlite3
+
+# Captures
+captures/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Node
+node_modules/
+frontend/dist/
+frontend/node_modules/
+
+# Logs
+*.log
+
+# Misc
+*.bak
+*.tmp
